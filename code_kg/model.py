@@ -3,11 +3,80 @@
 import torch
 import torch.nn as nn
 from transformers import BertModel
-from code.utils import get_span_mask, get_span_size, get_context_span
+from code_kg.utils import get_span_mask, get_span_size, get_context_span
 from ltp import LTP
 nlp = LTP()
 from transformers import BertTokenizer
 import numpy as np
+
+from code_kg.AttentionModel import AttentionPooling
+from code_kg.kg_embed import getAllEntityTriplet, getEntity, loadBertEmbed
+from_file = '/home/gene/Documents/Senti/Comment/knowledgebase/unlabel/deduplicate/data.txt'
+target_ids, opinion_ids, target_list, opinion_list = getEntity(from_file)
+target_triplet_dict, opinion_triplet_dict = getAllEntityTriplet()
+enhanced_target_embed, enhanced_opinion_embed, target_list, opinion_list = loadBertEmbed()
+
+class KGEnhancedEmbedLayer(nn.Module):
+    def __init__(self, tokenizer, encoder):
+        super(KGEnhancedEmbedLayer, self).__init__()
+        self.tokenizer = tokenizer
+        self.encoder = encoder
+        self.target_triplet_dict = target_triplet_dict
+        self.opinion_triplet_dict = opinion_triplet_dict
+        self.attn_pooling = AttentionPooling(768, 200)
+        self.linear = nn.Linear(768 * 2, 768)
+
+    def decode_text(self, input_ids):
+        text_list = []
+        for i in range(input_ids.shape[0]):
+            text = self.tokenizer.decode(input_ids[i])
+            text_list.append(text.replace(' ', '').replace('[CLS]', '').replace('[SEP]', '').replace('[PAD]', ''))
+        return text_list
+    
+    def calcu_batch_ent_trip_reps(self, token_ids, ent_spans):
+        batch_ent_trip_reps = []
+        for i in range(token_ids.shape[0]):
+            text = self.tokenizer.decode(token_ids[i])
+            text = text.replace(' ', '').replace('[CLS]', '').replace('[SEP]', '').replace('[PAD]', '')
+            ent_trip_reps = []
+            for ent_span in ent_spans[i]:
+                ent_text = text[ent_span[0]: ent_span[1]]
+                ent_tail_state = self.enhanceByTriplet(ent_text) # (1, hidden_size)
+                ent_trip_reps.append(ent_tail_state)
+            ent_trip_reps = torch.cat(ent_trip_reps, dim = 0) # (max_num_ents, hidden_size)
+            batch_ent_trip_reps.append(ent_trip_reps)
+        batch_ent_trip_reps = torch.stack(batch_ent_trip_reps) # (batch_size, max_num_ents, hidden_size)
+        return batch_ent_trip_reps
+    
+    def enhanceByTriplet(self, entity):
+        enhanced_emb = torch.zeros(1, 768 * 2)
+        if entity in target_ids:
+            enhanced_emb[:768] += enhanced_target_embed[target_ids[entity]]
+        if entity in opinion_ids:
+            enhanced_emb[768:] += enhanced_opinion_embed[opinion_ids[entity]]
+        return self.linear(enhanced_emb.cuda())
+    
+    # 使用三元组信息进行加权
+    def enhanceByTripletV2(self, entity):
+        tail_list = [entity]
+        if entity in self.target_triplet_dict:
+            tail_list += self.target_triplet_dict[entity]
+        if entity in self.opinion_triplet_dict:
+            tail_list += self.opinion_triplet_dict[entity]
+        tail_embeds = torch.zeros(1, 768)
+        for i in range(len(tail_list)):
+            tail_ids = self.tokenizer(tail_list[i], return_tensors='pt', padding=True).to('cuda')
+            tail_embed = self.encoder(tail_ids['input_ids'], tail_ids['attention_mask'])[0]
+            tail_embed = tail_embed.detach().cpu()
+            tail_embeds += torch.mean(tail_embed, dim=0)
+        # tail_embeds = torch.stack(tail_embeds)
+        # tail_ids = self.tokenizer(tail_list, return_tensors='pt', padding=True).to('cuda') # (batch_size, max_text_len)
+        # tail_embeds = self.encoder(tail_ids['input_ids'], tail_ids['attention_mask'])[0]
+        # tail_embeds = self.attn_pooling(tail_embeds)
+        return tail_embeds
+    
+    def forward(self, entity):
+        return self.enhanceByTriplet(entity)
 
 class Model(nn.Module):
     def __init__(self, config):
@@ -47,6 +116,7 @@ class Model(nn.Module):
                                                       num_rel_types=self.num_rel_types,
                                                       num_categories=self.num_categories,
                                                       num_polarities=self.num_polarities)
+        self.kg_enhanced_embed_layer = KGEnhancedEmbedLayer(self.tokenizer, self.encoder)
 
     def forward_train(self, token_ids, token_mask, ent_spans, ent_masks, ent_sizes, ent_segs, rel_pairs, rel_masks, rel_sizes):
         '''
@@ -69,7 +139,8 @@ class Model(nn.Module):
         '''
 
         hidden_states = self.encoder(token_ids, token_mask)
-        ent_type_logits, ent_cate_logits, ent_pola_logits, ent_span_reps, ent_segs_embs = self.entity_classifier(hidden_states, ent_spans, ent_masks, ent_sizes, ent_segs)
+        ent_trip_reps = self.kg_enhanced_embed_layer.calcu_batch_ent_trip_reps(token_ids, ent_spans)
+        ent_type_logits, ent_cate_logits, ent_pola_logits, ent_span_reps, ent_segs_embs = self.entity_classifier(hidden_states, ent_spans, ent_masks, ent_sizes, ent_segs, ent_trip_reps)
         rel_type_logits, rel_cate_logits, rel_pola_logits = self.relation_classifier(hidden_states, rel_pairs, rel_masks, rel_sizes, ent_span_reps, ent_segs_embs)
 
         ent_logits = (ent_type_logits, ent_cate_logits, ent_pola_logits)
@@ -93,8 +164,8 @@ class Model(nn.Module):
 
         hidden_states = self.encoder(token_ids, token_mask)
         # 用 ltp 分词构建 ent_spans
-        ent_spans, ent_masks, ent_sizes, ent_segs = self.create_candidate_entities(hidden_states, token_ids)
-        ent_type_logits, ent_cate_logits, ent_pola_logits, ent_span_reps, ent_segs_embs = self.entity_classifier(hidden_states, ent_spans, ent_masks, ent_sizes, ent_segs)
+        ent_spans, ent_masks, ent_sizes, ent_segs, ent_trips = self.create_candidate_entities(hidden_states, token_ids)
+        ent_type_logits, ent_cate_logits, ent_pola_logits, ent_span_reps, ent_segs_embs = self.entity_classifier(hidden_states, ent_spans, ent_masks, ent_sizes, ent_segs, ent_trips)
         rel_pairs, rel_masks, rel_sizes = self.create_candidate_relations(ent_spans, ent_type_logits)
         rel_type_logits, rel_cate_logits, rel_pola_logits = self.relation_classifier(hidden_states, rel_pairs, rel_masks, rel_sizes, ent_span_reps, ent_segs_embs)
 
@@ -131,6 +202,16 @@ class Model(nn.Module):
                 ent_span = (ent_head, ent_head + ent_size)
                 ent_spans.append(ent_span)
 
+        # ent span texts
+        ent_trip_reps = []
+        raw_text = ''.join(text_list)
+        for ent_span in ent_spans:
+            ent_text = raw_text[ent_span[0]:ent_span[1]]
+            # ent_texts.append(ent_text)
+            ent_tail_state = self.kg_enhanced_embed_layer(ent_text)
+            ent_trip_reps.append(ent_tail_state)
+        ent_trip_reps = torch.cat(ent_trip_reps, 0) # (max_num_ents, hidden_size)
+
         ent_masks, ent_sizes = [], []
         # ent_segs = []
         for ent_span in ent_spans:
@@ -144,10 +225,12 @@ class Model(nn.Module):
             ent_spans += [ent_span] * (self.max_num_ents - num_ents)
             ent_masks += [get_span_mask(self.max_text_len, ent_span)] * (self.max_num_ents - num_ents)
             ent_sizes += [get_span_size(ent_span)] * (self.max_num_ents - num_ents)
+            ent_trip_reps = torch.cat([ent_trip_reps, torch.zeros(self.max_num_ents - num_ents, self.hidden_size).cuda()], 0)
         else:
             ent_spans = ent_spans[:self.max_num_ents]
             ent_masks = ent_masks[:self.max_num_ents]
             ent_sizes = ent_sizes[:self.max_num_ents]
+            ent_trip_reps = ent_trip_reps[:self.max_num_ents]
 
         # convert to tensors
         ent_spans = torch.tensor(ent_spans, dtype=torch.long)  # (max_num_ents, 2)
@@ -157,6 +240,7 @@ class Model(nn.Module):
         # create batch
         batch_size = hidden_states.shape[0]
         batch_ent_spans = ent_spans.unsqueeze(0).repeat(batch_size, 1, 1)  # (batch_size, max_num_ents, 2)
+        batch_ent_trips = ent_trip_reps.unsqueeze(0).repeat(batch_size, 1, 1)  # (batch_size, max_num_ents, hidden_size)
         batch_ent_masks = ent_masks.unsqueeze(0).repeat(batch_size, 1, 1)  # (batch_size, max_num_ents, max_text_len)
         batch_ent_sizes = ent_sizes.unsqueeze(0).repeat(batch_size, 1)  # (batch_size, max_num_ents)
         batch_ent_segs = torch.from_numpy(np.zeros((batch_size, self.max_num_ents), dtype=int)) # (batch_size, max_num_ents)
@@ -174,7 +258,8 @@ class Model(nn.Module):
         batch_ent_masks = batch_ent_masks.cuda()
         batch_ent_sizes = batch_ent_sizes.cuda()
         batch_ent_segs = batch_ent_segs.cuda()
-        return batch_ent_spans, batch_ent_masks, batch_ent_sizes, batch_ent_segs
+        batch_ent_trips = batch_ent_trips.cuda()
+        return batch_ent_spans, batch_ent_masks, batch_ent_sizes, batch_ent_segs, batch_ent_trips
 
     def create_candidate_relations(self, batch_ent_spans, batch_ent_logits):
         # batch_ent_spans : (batch_size, max_num_ents, 2)
@@ -277,18 +362,20 @@ class EntityClassifier(nn.Module):
         self.num_polarities = num_polarities
         # modules
         # self.size_embedding = nn.Embedding(self.num_size_emb, self.size_emb_dim)
+        # self.span_reduce = nn.Linear(self.hidden_size, self.hidden_size // 2)
         self.seg_embedding = nn.Embedding(self.num_seg_emb, self.seg_emb_dim)
         self.dropout = nn.Dropout(self.dropout_prob)
-        self.type_classifier = nn.Linear(1 * (self.hidden_size + self.seg_emb_dim), self.num_ent_types)
-        self.cate_classifier = nn.Linear(1 * (self.hidden_size + self.seg_emb_dim), self.num_categories)
-        self.pola_classifier = nn.Linear(1 * (self.hidden_size + self.seg_emb_dim), self.num_polarities)
+        self.type_classifier = nn.Linear(1 * (self.hidden_size + self.seg_emb_dim + self.hidden_size), self.num_ent_types)
+        self.cate_classifier = nn.Linear(1 * (self.hidden_size + self.seg_emb_dim + self.hidden_size), self.num_categories)
+        self.pola_classifier = nn.Linear(1 * (self.hidden_size + self.seg_emb_dim + self.hidden_size), self.num_polarities)
 
-    def forward(self, hidden_states, ent_spans, ent_masks, ent_sizes, ent_segs):
+    def forward(self, hidden_states, ent_spans, ent_masks, ent_sizes, ent_segs, ent_trips):
         # hidden_states: (batch_size, max_text_len, hidden_size)
         # ent_spans    : (batch_size, max_num_ents, 2)
         # ent_masks    : (batch_size, max_num_ents, max_text_len)
         # ent_sizes    : (batch_size, max_num_ents)
         # ent_segs    : (batch_size, max_num_ents)
+        # ent_trips    : (batch_size, max_num_ents, hidden_size)
         #
         # ent_type_logits: (batch_size, max_num_ents, num_ent_types)
         # ent_cate_logits: (batch_size, max_num_ents, num_categories)
@@ -322,6 +409,7 @@ class EntityClassifier(nn.Module):
         # torch.cat([ent_size_embs, ent_segs_embs], dim=-1)
         # 把 ent seg embedding 和对 span 的 max_pooling 的表示连接起来
         features = torch.cat([ent_span_reps, ent_segs_embs], dim=2)  # (batch_size, max_num_ents, 1 * (hidden_size + seg_emb_dim))
+        features = torch.cat([features, ent_trips], dim=2)  # (batch_size, max_num_ents, hidden_size + seg_emb_dim + hidden_size)
         features = self.dropout(features)
         ent_type_logits = self.type_classifier(features)  # (batch_size, max_num_ents, num_ent_types)
         ent_cate_logits = self.cate_classifier(features)  # (batch_size, max_num_ents, num_categories)
@@ -392,7 +480,7 @@ class RelationClassifier(nn.Module):
 
 # debug
 if __name__ == "__main__":
-    root = "/data1/chenfang/Project/JDComment"
+    root = '/home/gene/Documents/Sentiment/JDComment_seg'
 
     model_config = {
         "bert_path": "{}/model/bert-base-chinese".format(root),
@@ -402,6 +490,7 @@ if __name__ == "__main__":
         "max_num_rels": 120,
         "hidden_size": 768,
         "size_emb_dim": 20,
+        "seg_emb_dim": 20,
         "dropout_prob": 0.1,
         "num_categories": 9,
         "num_polarities": 3,

@@ -4,9 +4,11 @@ import random
 import torch
 from torch.utils.data import Dataset as TorchDataset
 from transformers import BertTokenizer
-from code.utils import load_json, get_span_mask, get_span_size, get_context_span
+from code_kg.utils import load_json, get_span_mask, get_span_size, get_context_span
 from ltp import LTP
 nlp = LTP()
+
+from code_kg.model import KGEnhancedEmbedLayer
 
 class Instance(object):
     def __init__(self):
@@ -141,9 +143,9 @@ class Dataset(TorchDataset):
 
         seg_list, hidden = nlp.seg([instance.text])
         seg_list = seg_list[0]
-        seg_word_len_list = [len(word) for word in seg_list]
-        seg_head_list = [sum(seg_word_len_list[:i]) for i in range(len(seg_word_len_list))]
-        seg_tail_list = [sum(seg_word_len_list[:i+1]) for i in range(len(seg_word_len_list))]
+        seg_word_len_list = [len(word) for word in seg_list] # 分词后每个词的长度
+        seg_head_list = [sum(seg_word_len_list[:i]) for i in range(len(seg_word_len_list))] # 分词后每个词的起始位置idx
+        seg_tail_list = [sum(seg_word_len_list[:i+1]) for i in range(len(seg_word_len_list))] # 分词后每个词的结束位置idx
 
         # positive entities (entity type: other=0, target=1, opinion=2)
         pos_ent_spans, pos_ent_masks, pos_ent_sizes, pos_ent_types, pos_ent_cates, pos_ent_polas = [], [], [], [], [], []
@@ -302,8 +304,8 @@ class Dataset(TorchDataset):
             ent_types = ent_types[:self.max_num_ents]
             ent_cates = ent_cates[:self.max_num_ents]
             ent_polas = ent_polas[:self.max_num_ents]
-            ent_segs = ent_segs[:self.max_num_ents]
-
+            ent_segs = ent_segs[:self.max_num_ents] 
+        
         # pad relations
         num_rels = len(rel_pairs)
         if num_rels < self.max_num_rels:
@@ -360,7 +362,7 @@ class Dataset(TorchDataset):
 if __name__ == "__main__":
     from torch.utils.data import DataLoader, SequentialSampler
 
-    root = "/data1/chenfang/Project/JDComment"
+    root = "/home/gene/Documents/Sentiment/JDComment_seg"
     dataset_config = {
         "bert_path": "{}/model/bert-base-chinese".format(root),
         "cate_path": "{}/data/category.txt".format(root),
@@ -382,33 +384,37 @@ if __name__ == "__main__":
     dataloader = DataLoader(dataset, sampler=sampler, batch_size=batch_size)
     print("number of training instances: {}".format(len(dataset)))
 
-    ins_idx = 14
+    ins_idx = 1
     item = dataset[ins_idx]
 
     print(dataset.tokenizer.convert_ids_to_tokens(item["token_ids"]))
 
     print("ent_spans:", item["ent_spans"].shape)
     print(item["ent_spans"][0:5])
+    for i in range(5):
+        print(dataset.tokenizer.convert_ids_to_tokens(item["token_ids"][item["ent_spans"][i][0]:item["ent_spans"][i][1]]))
+    print("ent_segs:", item["ent_segs"].shape)
+    print(item["ent_segs"][0:5])
     print("ent_masks:", item["ent_masks"].shape)
     print(item["ent_masks"][0:5])
     print("ent_sizes:", item["ent_sizes"].shape)
     print(item["ent_sizes"][0:5])
-    print("ent_types:", item["ent_types"].shape)
-    print(item["ent_types"][0:5])
-    print("ent_cates:", item["ent_cates"].shape)
-    print(item["ent_cates"][0:5])
-    print("ent_polas:", item["ent_polas"].shape)
-    print(item["ent_polas"][0:5])
+    # print("ent_types:", item["ent_types"].shape)
+    # print(item["ent_types"][0:5])
+    # print("ent_cates:", item["ent_cates"].shape)
+    # print(item["ent_cates"][0:5])
+    # print("ent_polas:", item["ent_polas"].shape)
+    # print(item["ent_polas"][0:5])
 
-    print("rel_pairs:", item["rel_pairs"].shape)
-    print(item["rel_pairs"][0:5])
-    print("rel_masks:", item["rel_masks"].shape)
-    print(item["rel_masks"][0:5])
-    print("rel_sizes:", item["rel_sizes"].shape)
-    print(item["rel_sizes"][0:5])
-    print("rel_types:", item["rel_types"].shape)
-    print(item["rel_types"][0:5])
-    print("rel_cates:", item["rel_cates"].shape)
-    print(item["rel_cates"][0:5])
-    print("rel_polas:", item["rel_polas"].shape)
-    print(item["rel_polas"][0:5])
+    # print("rel_pairs:", item["rel_pairs"].shape)
+    # print(item["rel_pairs"][0:5])
+    # print("rel_masks:", item["rel_masks"].shape)
+    # print(item["rel_masks"][0:5])
+    # print("rel_sizes:", item["rel_sizes"].shape)
+    # print(item["rel_sizes"][0:5])
+    # print("rel_types:", item["rel_types"].shape)
+    # print(item["rel_types"][0:5])
+    # print("rel_cates:", item["rel_cates"].shape)
+    # print(item["rel_cates"][0:5])
+    # print("rel_polas:", item["rel_polas"].shape)
+    # print(item["rel_polas"][0:5])

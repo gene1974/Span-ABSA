@@ -6,10 +6,10 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from transformers import AdamW, get_linear_schedule_with_warmup
-from code.dataset import Dataset
-from code.model import Model
-from code.logger import Logger
-from code.utils import cpu_to_gpu, count_instances, compute_prf
+from code_kg.dataset import Dataset
+from code_kg.model import Model
+from code_kg.logger import Logger
+from code_kg.utils import cpu_to_gpu, count_instances, compute_prf
 
 
 class Factory(object):
@@ -345,6 +345,10 @@ class Factory(object):
         self.print_args(logger)
         logger.print("--------------------------")
 
+        import time
+        time_stamp = time.strftime("%Y%m%d_%H%M", time.localtime())
+        model_path = '{}.{}'.format(self.args.model_path, time_stamp)
+
         # dataset config
         dataset_config = self.get_dataset_config()
 
@@ -416,12 +420,12 @@ class Factory(object):
             logger.print("----------------------------------------")
             logger.print("epoch: {}/{}".format(epoch + 1, self.args.max_num_epochs))
             # 训练
-            self.train_one_epoch(dataset=train_dataset,
-                                 dataloader=train_dataloader,
-                                 model=model,
-                                 loss_function=loss_function,
-                                 optimizer=optimizer,
-                                 scheduler=scheduler)
+            # self.train_one_epoch(dataset=train_dataset,
+            #                      dataloader=train_dataloader,
+            #                      model=model,
+            #                      loss_function=loss_function,
+            #                      optimizer=optimizer,
+            #                      scheduler=scheduler)
             # 预测
             valid_outputs = self.predict(dataset=valid_dataset,
                                          dataloader=valid_dataloader,
@@ -444,7 +448,7 @@ class Factory(object):
                 best_epoch = epoch + 1
                 best_score = valid_score
                 best_metrics = valid_metrics
-                logger.print("saving model to {}".format(self.args.model_path))
+                logger.print("saving model to {}".format(model_path))
                 self.save_model(model, self.args.model_path)
             else:
                 num_no_improve += 1
