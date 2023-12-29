@@ -34,6 +34,37 @@ def getAllEntityTriplet(from_file = '/home/gene/Documents/Senti/Comment/knowledg
     print('Get entity triplet from data_file: {}, target_dict: {}, opinion_dict: {}'.format(from_file, len(target_dict), len(opinion_dict))) # target_dict: 12122, opinion_dict: 34028
     return target_dict, opinion_dict
 
+# get all entity and its related triplet: entity -> [tail]
+def getTriplet(from_file = '/home/gene/Documents/Senti/Comment/knowledgebase/unlabel/deduplicate/data.txt'):
+    triplet_dict = {}
+    with open(from_file, 'r') as f:
+        for line in f:
+            target, opinion, polarity, product, category = line.strip().split('\t')
+            triplet_dict['{}-{}'.format(target, opinion)] = '{}-{}-{}-{}'.format(target, opinion, category, polarity)
+    print('Get triplet from data_file: {}, triplet_dict: {}'.format(from_file, len(triplet_dict))) # triplet_dict: 148600
+    return triplet_dict
+
+# get all entity and its related triplet: entity -> [tail]
+def getTopEntityTriplet(from_file = '/home/gene/Documents/Senti/Comment/knowledgebase/unlabel/deduplicate/data.txt'):
+    target_dict = {}
+    opinion_dict = {}
+    with open(from_file, 'r') as f:
+        for line in f:
+            target, opinion, polarity, product, category = line.strip().split('\t')
+            target_dict[target] = target_dict.get(target, {})
+            target_dict[target][opinion] = target_dict[target].get(opinion, 0) + 1
+            opinion_dict[opinion] = opinion_dict.get(opinion, {})
+            opinion_dict[opinion][target] = opinion_dict[opinion].get(target, 0) + 1
+    for target in target_dict:
+        target_dict[target] = sorted(target_dict[target].items(), key = lambda x: x[1], reverse = True)[:10]
+        target_dict[target] = [t[0] for t in target_dict[target]]
+    for opinion in opinion_dict:
+        opinion_dict[opinion] = sorted(opinion_dict[opinion].items(), key = lambda x: x[1], reverse = True)[:10]
+        opinion_dict[opinion] = [t[0] for t in opinion_dict[opinion]]
+    # target_dict['花生']: [('不错', 24), ('很好', 18), ('可以', 9), ('一般', 8), ('很不错', 8), ('还可以', 8), ('新鲜', 7), ('不新鲜', 6), ('不好', 6), ('好吃', 6)]
+    print('Get entity top triplets, target_dict: {}, opinion_dict: {}'.format(from_file, len(target_dict), len(opinion_dict))) # target_dict: 12122, opinion_dict: 34028
+    return target_dict, opinion_dict
+
 # get single entity embedding
 def embedEntity(tokenizer, model, entity):
     token_ids = tokenizer.encode(entity, return_tensors = 'pt', padding = True)
@@ -93,9 +124,12 @@ def loadBertEmbed():
     enhanced_target_embed, enhanced_opinion_embed, target_list, opinion_list = pickle.load(open('/home/gene/Documents/Sentiment/JDComment_seg/data/enhanced_entity_embed_bert.pkl', 'rb'))
     return enhanced_target_embed, enhanced_opinion_embed, target_list, opinion_list
 
+
+
 if __name__ == '__main__':
     # getBertEmbed()
-    from_file = '/home/gene/Documents/Senti/Comment/knowledgebase/unlabel/deduplicate/data.txt'
-    target_triplet_dict, opinion_triplet_dict = getAllEntityTriplet(from_file)
-    print(max([len(target_triplet_dict[t]) for t in target_triplet_dict]), max([len(opinion_triplet_dict[t]) for t in opinion_triplet_dict]))
+    # from_file = '/home/gene/Documents/Senti/Comment/knowledgebase/unlabel/deduplicate/data.txt'
+    # target_triplet_dict, opinion_triplet_dict = getAllEntityTriplet(from_file)
+    # print(max([len(target_triplet_dict[t]) for t in target_triplet_dict]), max([len(opinion_triplet_dict[t]) for t in opinion_triplet_dict]))
+    pass
 

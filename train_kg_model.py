@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 
 import warnings
 from code_kg.config import get_default_args

@@ -10,11 +10,18 @@ from transformers import BertTokenizer
 import numpy as np
 
 from code_kg.AttentionModel import AttentionPooling
-from code_kg.kg_embed import getAllEntityTriplet, getEntity, loadBertEmbed
+from code_kg.kg_embed import getAllEntityTriplet, getEntity, loadBertEmbed, getTopEntityTriplet
 from_file = '/home/gene/Documents/Senti/Comment/knowledgebase/unlabel/deduplicate/data.txt'
 target_ids, opinion_ids, target_list, opinion_list = getEntity(from_file)
 target_triplet_dict, opinion_triplet_dict = getAllEntityTriplet()
 enhanced_target_embed, enhanced_opinion_embed, target_list, opinion_list = loadBertEmbed()
+target_top_triplet_dict, opinion_top_triplet_dict = getTopEntityTriplet()
+
+# use transe embedding
+import pickle
+model_time = '12111305'
+ent_dict, ent_emb = pickle.load(open('/home/gene/Documents/Senti/Comment/CommentTransE/result/transe_ent_emb.{}.pkl'.format(model_time), 'rb'))
+ent_emb_dict = {ent: ent_emb[ent_dict[ent]] for ent in ent_dict}
 
 class KGEnhancedEmbedLayer(nn.Module):
     def __init__(self, tokenizer, encoder):
@@ -23,8 +30,16 @@ class KGEnhancedEmbedLayer(nn.Module):
         self.encoder = encoder
         self.target_triplet_dict = target_triplet_dict
         self.opinion_triplet_dict = opinion_triplet_dict
+        self.target_ids = target_ids
+        self.opinion_ids = opinion_ids
         self.attn_pooling = AttentionPooling(768, 200)
-        self.linear = nn.Linear(768 * 2, 768)
+        # self.linear = nn.Linear(768 * 2, 768)
+
+    def encode_triplets(self):
+        self.tokenid_dict = {}
+        for entity in self.target_triplet_dict:
+            token_ids = self.tokenizer(self.target_triplet_dict[entity], return_tensors='pt', padding=True) # (tail_num, token_size)
+            self.tokenid_dict[entity] = token_ids['input_ids']
 
     def decode_text(self, input_ids):
         text_list = []
@@ -41,6 +56,22 @@ class KGEnhancedEmbedLayer(nn.Module):
             ent_trip_reps = []
             for ent_span in ent_spans[i]:
                 ent_text = text[ent_span[0]: ent_span[1]]
+                # ent_tail_state = self.enhanceByTriplet(ent_text) # (1, hidden_size)
+                ent_tail_state = self.enhanceByTransE(ent_text) # (1, hidden_size)
+                ent_trip_reps.append(ent_tail_state)
+            ent_trip_reps = torch.cat(ent_trip_reps, dim = 0) # (max_num_ents, hidden_size)
+            batch_ent_trip_reps.append(ent_trip_reps)
+        batch_ent_trip_reps = torch.stack(batch_ent_trip_reps) # (batch_size, max_num_ents, hidden_size)
+        return batch_ent_trip_reps
+    
+    def calcu_batch_ent_trip_repsV2(self, token_ids, ent_spans):
+        batch_ent_trip_reps = []
+        for i in range(token_ids.shape[0]):
+            text = self.tokenizer.decode(token_ids[i])
+            text = text.replace(' ', '').replace('[CLS]', '').replace('[SEP]', '').replace('[PAD]', '')
+            ent_trip_reps = []
+            for ent_span in ent_spans[i]:
+                ent_text = text[ent_span[0]: ent_span[1]]
                 ent_tail_state = self.enhanceByTriplet(ent_text) # (1, hidden_size)
                 ent_trip_reps.append(ent_tail_state)
             ent_trip_reps = torch.cat(ent_trip_reps, dim = 0) # (max_num_ents, hidden_size)
@@ -48,13 +79,29 @@ class KGEnhancedEmbedLayer(nn.Module):
         batch_ent_trip_reps = torch.stack(batch_ent_trip_reps) # (batch_size, max_num_ents, hidden_size)
         return batch_ent_trip_reps
     
+    # def enhanceByTopTriplet(self, entity):
+
+    def enhanceByTransE(self, entity):
+        if entity in ent_emb_dict:
+            return ent_emb_dict[entity].unsqueeze(0).cuda()
+        else:
+            return torch.zeros(1, 768).cuda()
+    
     def enhanceByTriplet(self, entity):
-        enhanced_emb = torch.zeros(1, 768 * 2)
+        enhanced_emb = torch.zeros(1, 768)
         if entity in target_ids:
-            enhanced_emb[:768] += enhanced_target_embed[target_ids[entity]]
+            enhanced_emb += enhanced_target_embed[target_ids[entity]]
         if entity in opinion_ids:
-            enhanced_emb[768:] += enhanced_opinion_embed[opinion_ids[entity]]
-        return self.linear(enhanced_emb.cuda())
+            enhanced_emb += enhanced_opinion_embed[opinion_ids[entity]]
+        return enhanced_emb.cuda()
+    
+    # def enhanceByTriplet(self, entity):
+    #     enhanced_emb = torch.zeros(1, 768 * 2)
+    #     if entity in target_ids:
+    #         enhanced_emb[:768] += enhanced_target_embed[target_ids[entity]]
+    #     if entity in opinion_ids:
+    #         enhanced_emb[768:] += enhanced_opinion_embed[opinion_ids[entity]]
+    #     return self.linear(enhanced_emb.cuda())
     
     # 使用三元组信息进行加权
     def enhanceByTripletV2(self, entity):
@@ -76,7 +123,101 @@ class KGEnhancedEmbedLayer(nn.Module):
         return tail_embeds
     
     def forward(self, entity):
-        return self.enhanceByTriplet(entity)
+        return self.enhanceByTransE(entity)
+
+class EntModel(nn.Module):
+    def __init__(self, config):
+        super(EntModel, self).__init__()
+        # parameters
+        self.bert_path = config["bert_path"]  # BERT路径
+        self.max_text_len = config["max_text_len"]  # 最大文本长度
+        self.max_span_len = config["max_span_len"]  # 最大片段长度
+        # self.max_num_ents = config["max_num_ents"]  # 最大候选实体数量
+        # self.max_num_rels = config["max_num_rels"]  # 最大候选关系数量
+        self.hidden_size = config["hidden_size"]  # 隐藏状态维度
+        # self.size_emb_dim = config["size_emb_dim"]  # 宽度嵌入维度
+        self.seg_emb_dim = config["seg_emb_dim"]  # 分词嵌入维度
+        self.dropout_prob = config["dropout_prob"]  # dropout概率
+        self.num_ent_types = 3  # 实体类别数量 (other=0, target=1, opinion=2)
+        self.num_rel_types = 2  # 关系类别数量 (none=0, pair=1)
+        self.num_categories = config["num_categories"]  # 方面类别数量
+        self.num_polarities = config["num_polarities"]  # 极性类别数量
+        # modules
+        self.tokenizer = BertTokenizer.from_pretrained(self.bert_path)
+        self.encoder = BERTEncoder(bert_path=self.bert_path)
+        self.entity_classifier = EntityClassifier(hidden_size=self.hidden_size,
+                                                  num_size_emb=self.max_span_len + 1,
+                                                  size_emb_dim=self.size_emb_dim,
+                                                  num_seg_emb=self.max_text_len + 1,
+                                                  seg_emb_dim=self.seg_emb_dim,
+                                                  dropout_prob=self.dropout_prob,
+                                                  num_ent_types=self.num_ent_types,
+                                                  num_categories=self.num_categories,
+                                                  num_polarities=self.num_polarities)
+        self.relation_classifier = RelationClassifier(hidden_size=self.hidden_size,
+                                                      num_size_emb=self.max_text_len + 1,
+                                                      size_emb_dim=self.size_emb_dim,
+                                                      num_seg_emb=self.max_text_len + 1,
+                                                      seg_emb_dim=self.seg_emb_dim,
+                                                      dropout_prob=self.dropout_prob,
+                                                      num_rel_types=self.num_rel_types,
+                                                      num_categories=self.num_categories,
+                                                      num_polarities=self.num_polarities)
+        self.kg_enhanced_embed_layer = KGEnhancedEmbedLayer(self.tokenizer, self.encoder)
+
+    def forward_train(self, token_ids, token_mask, ent_spans, ent_masks, ent_sizes, ent_segs, rel_pairs, rel_masks, rel_sizes):
+        '''
+        # token_ids : (batch_size, max_text_len)
+        # token_mask: (batch_size, max_text_len)
+        # ent_spans : (batch_size, max_num_ents, 2)
+        # ent_masks : (batch_size, max_num_ents, max_text_len)
+        # ent_sizes : (batch_size, max_num_ents)
+        # ent_segs : (batch_size, max_num_ents)
+        # rel_pairs  : (batch_size, max_num_rels, 2)
+        # rel_masks : (batch_size, max_num_rels, max_text_len)
+        # rel_sizes : (batch_size, max_num_rels)
+        #
+        # ent_type_logits: (batch_size, max_num_ents, num_ent_types)
+        # ent_cate_logits: (batch_size, max_num_ents, num_categories)
+        # ent_pola_logits: (batch_size, max_num_ents, num_polarities)
+        # rel_type_logits: (batch_size, max_num_rels, num_rel_types)
+        # rel_cate_logits: (batch_size, max_num_rels, num_categories)
+        # rel_pola_logits: (batch_size, max_num_rels, num_polarities)
+        '''
+
+        hidden_states = self.encoder(token_ids, token_mask)
+        ent_trip_reps = self.kg_enhanced_embed_layer.calcu_batch_ent_trip_reps(token_ids, ent_spans)
+        ent_type_logits, ent_cate_logits, ent_pola_logits, ent_span_reps, ent_segs_embs = self.entity_classifier(hidden_states, ent_spans, ent_masks, ent_sizes, ent_segs, ent_trip_reps)
+        rel_type_logits, rel_cate_logits, rel_pola_logits = self.relation_classifier(hidden_states, rel_pairs, rel_masks, rel_sizes, ent_span_reps, ent_segs_embs)
+
+        ent_logits = (ent_type_logits, ent_cate_logits, ent_pola_logits)
+        rel_logits = (rel_type_logits, rel_cate_logits, rel_pola_logits)
+        return ent_logits, rel_logits
+
+    def forward_infer(self, token_ids, token_mask):
+        '''
+        # token_ids : (batch_size, max_text_len)
+        # token_mask: (batch_size, max_text_len)
+        #
+        # ent_spans: (batch_size, max_num_ents, 2)
+        # rel_pairs: (batch_size, max_num_rels, 2)
+        # ent_type_logits: (batch_size, max_num_ents, num_ent_types)
+        # ent_cate_logits: (batch_size, max_num_ents, num_categories)
+        # ent_pola_logits: (batch_size, max_num_ents, num_polarities)
+        # rel_type_logits: (batch_size, max_num_rels, num_rel_types)
+        # rel_cate_logits: (batch_size, max_num_rels, num_categories)
+        # rel_pola_logits: (batch_size, max_num_rels, num_polarities)
+        '''
+        hidden_states = self.encoder(token_ids, token_mask)
+        # 用 ltp 分词构建 ent_spans
+        ent_spans, ent_masks, ent_sizes, ent_segs, ent_trips = self.create_candidate_entities(hidden_states, token_ids)
+        ent_type_logits, ent_cate_logits, ent_pola_logits, ent_span_reps, ent_segs_embs = self.entity_classifier(hidden_states, ent_spans, ent_masks, ent_sizes, ent_segs, ent_trips)
+        rel_pairs, rel_masks, rel_sizes = self.create_candidate_relations(ent_spans, ent_type_logits)
+        rel_type_logits, rel_cate_logits, rel_pola_logits = self.relation_classifier(hidden_states, rel_pairs, rel_masks, rel_sizes, ent_span_reps, ent_segs_embs)
+
+        ent_logits = (ent_type_logits, ent_cate_logits, ent_pola_logits)
+        rel_logits = (rel_type_logits, rel_cate_logits, rel_pola_logits)
+        return ent_spans, rel_pairs, ent_logits, rel_logits
 
 class Model(nn.Module):
     def __init__(self, config):
