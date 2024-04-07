@@ -5,7 +5,9 @@ import argparse
 
 def get_default_args(root):
     parser = argparse.ArgumentParser()
-
+    parser.add_argument("--use_ent_span", action='store_true')
+    parser.add_argument("--use_rel_span", action='store_true')
+    
     parser.add_argument("--bert_path", type=str, default="{}/model/bert-base-chinese".format(root))  # BERT
     parser.add_argument("--cate_path", type=str, default="{}/data/category.txt".format(root))  # 方面类别列表
     parser.add_argument("--pola_path", type=str, default="{}/data/polarity.txt".format(root))  # 极性类别列表

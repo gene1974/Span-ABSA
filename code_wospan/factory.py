@@ -6,10 +6,10 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
 from transformers import AdamW, get_linear_schedule_with_warmup
-from code_kg.dataset import Dataset
-from code_kg.model import Model
-from code_kg.logger import Logger
-from code_kg.utils import cpu_to_gpu, count_instances, compute_prf
+from code_wospan.dataset import Dataset
+from code_wospan.model import Model
+from code_wospan.logger import Logger
+from code_wospan.utils import cpu_to_gpu, count_instances, compute_prf
 
 
 class Factory(object):
@@ -71,6 +71,8 @@ class Factory(object):
 
     def get_model_config(self):
         model_config = {
+            "use_ent_span": self.args.use_ent_span,
+            "use_rel_span": self.args.use_rel_span,
             "bert_path": self.args.bert_path,
             "max_text_len": self.args.max_text_len,
             "max_span_len": self.args.max_span_len,

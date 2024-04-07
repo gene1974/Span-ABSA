@@ -4,11 +4,9 @@ import random
 import torch
 from torch.utils.data import Dataset as TorchDataset
 from transformers import BertTokenizer
-from code_kg.utils import load_json, get_span_mask, get_span_size, get_context_span
+from code_wospan.utils import load_json, get_span_mask, get_span_size, get_context_span
 from ltp import LTP
 nlp = LTP()
-
-from code_kg.model import KGEnhancedEmbedLayer
 
 class Instance(object):
     def __init__(self):

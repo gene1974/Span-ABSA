@@ -432,7 +432,7 @@ class Factory(object):
                                          model=model)
             # 解码
             valid_results = self.decode(dataset=valid_dataset,
-                                        outputs=valid_outputs)Mod
+                                        outputs=valid_outputs)
             # 评估
             valid_metrics = self.evaluate(dataset=valid_dataset,
                                           results=valid_results)
