@@ -1,6 +1,116 @@
 import torch
+import torch.nn as nn
+
+from code_wospan.AttentionModel import AttentionPooling
 
 # simpliest version: word embedding avg
+class KGEnhancedEmbedLayer(nn.Module):
+    def __init__(self, tokenizer, encoder,
+                 target_triplet_dict, opinion_triplet_dict, target_ids, opinion_ids, ent_emb_dict, enhanced_target_embed, enhanced_opinion_embed, 
+                 ):
+        super(KGEnhancedEmbedLayer, self).__init__()
+        self.tokenizer = tokenizer
+        self.encoder = encoder
+        self.target_triplet_dict = target_triplet_dict
+        self.opinion_triplet_dict = opinion_triplet_dict
+        self.target_ids = target_ids
+        self.opinion_ids = opinion_ids
+        self.ent_emb_dict = ent_emb_dict
+        self.enhanced_target_embed = enhanced_target_embed
+        self.enhanced_opinion_embed = enhanced_opinion_embed
+        self.attn_pooling = AttentionPooling(768, 200)
+        # self.linear = nn.Linear(768 * 2, 768)
+
+    def encode_triplets(self):
+        self.tokenid_dict = {}
+        for entity in self.target_triplet_dict:
+            token_ids = self.tokenizer(self.target_triplet_dict[entity], return_tensors='pt', padding=True) # (tail_num, token_size)
+            self.tokenid_dict[entity] = token_ids['input_ids']
+
+    def decode_text(self, input_ids):
+        text_list = []
+        for i in range(input_ids.shape[0]):
+            text = self.tokenizer.decode(input_ids[i])
+            text_list.append(text.replace(' ', '').replace('[CLS]', '').replace('[SEP]', '').replace('[PAD]', ''))
+        return text_list
+    
+    def calcu_batch_ent_trip_reps(self, token_ids, ent_spans):
+        batch_ent_trip_reps = []
+        for i in range(token_ids.shape[0]):
+            text = self.tokenizer.decode(token_ids[i])
+            text = text.replace(' ', '').replace('[CLS]', '').replace('[SEP]', '').replace('[PAD]', '')
+            ent_trip_reps = []
+            for ent_span in ent_spans[i]:
+                ent_text = text[ent_span[0]: ent_span[1]]
+                # ent_tail_state = self.enhanceByTriplet(ent_text) # (1, hidden_size)
+                ent_tail_state = self.enhanceByTransE(ent_text) # (1, hidden_size)
+                ent_trip_reps.append(ent_tail_state)
+            ent_trip_reps = torch.cat(ent_trip_reps, dim = 0) # (max_num_ents, hidden_size)
+            batch_ent_trip_reps.append(ent_trip_reps)
+        batch_ent_trip_reps = torch.stack(batch_ent_trip_reps) # (batch_size, max_num_ents, hidden_size)
+        return batch_ent_trip_reps
+    
+    def calcu_batch_ent_trip_repsV2(self, token_ids, ent_spans):
+        batch_ent_trip_reps = []
+        for i in range(token_ids.shape[0]):
+            text = self.tokenizer.decode(token_ids[i])
+            text = text.replace(' ', '').replace('[CLS]', '').replace('[SEP]', '').replace('[PAD]', '')
+            ent_trip_reps = []
+            for ent_span in ent_spans[i]:
+                ent_text = text[ent_span[0]: ent_span[1]]
+                ent_tail_state = self.enhanceByTriplet(ent_text) # (1, hidden_size)
+                ent_trip_reps.append(ent_tail_state)
+            ent_trip_reps = torch.cat(ent_trip_reps, dim = 0) # (max_num_ents, hidden_size)
+            batch_ent_trip_reps.append(ent_trip_reps)
+        batch_ent_trip_reps = torch.stack(batch_ent_trip_reps) # (batch_size, max_num_ents, hidden_size)
+        return batch_ent_trip_reps
+    
+    # def enhanceByTopTriplet(self, entity):
+
+    def enhanceByTransE(self, entity):
+        if entity in self.ent_emb_dict:
+            return self.ent_emb_dict[entity].unsqueeze(0).cuda()
+        else:
+            return torch.zeros(1, 768).cuda()
+    
+    def enhanceByTriplet(self, entity):
+        enhanced_emb = torch.zeros(1, 768)
+        if entity in self.target_ids:
+            enhanced_emb += self.enhanced_target_embed[self.target_ids[entity]]
+        if entity in self.opinion_ids:
+            enhanced_emb += self.enhanced_opinion_embed[self.opinion_ids[entity]]
+        return enhanced_emb.cuda()
+    
+    # def enhanceByTriplet(self, entity):
+    #     enhanced_emb = torch.zeros(1, 768 * 2)
+    #     if entity in target_ids:
+    #         enhanced_emb[:768] += self.enhanced_target_embed[target_ids[entity]]
+    #     if entity in opinion_ids:
+    #         enhanced_emb[768:] += self.enhanced_opinion_embed[opinion_ids[entity]]
+    #     return self.linear(enhanced_emb.cuda())
+    
+    # 使用三元组信息进行加权
+    def enhanceByTripletV2(self, entity):
+        tail_list = [entity]
+        if entity in self.target_triplet_dict:
+            tail_list += self.target_triplet_dict[entity]
+        if entity in self.opinion_triplet_dict:
+            tail_list += self.opinion_triplet_dict[entity]
+        tail_embeds = torch.zeros(1, 768)
+        for i in range(len(tail_list)):
+            tail_ids = self.tokenizer(tail_list[i], return_tensors='pt', padding=True).to('cuda')
+            tail_embed = self.encoder(tail_ids['input_ids'], tail_ids['attention_mask'])[0]
+            tail_embed = tail_embed.detach().cpu()
+            tail_embeds += torch.mean(tail_embed, dim=0)
+        # tail_embeds = torch.stack(tail_embeds)
+        # tail_ids = self.tokenizer(tail_list, return_tensors='pt', padding=True).to('cuda') # (batch_size, max_text_len)
+        # tail_embeds = self.encoder(tail_ids['input_ids'], tail_ids['attention_mask'])[0]
+        # tail_embeds = self.attn_pooling(tail_embeds)
+        return tail_embeds
+    
+    def forward(self, entity):
+        return self.enhanceByTransE(entity)
+
 
 # get all entity: entity -> id
 def getEntity(from_file):
@@ -119,11 +229,26 @@ def getBertEmbed(from_file):
     with open('../data/enhanced_entity_embed_bert.pkl', 'wb') as f:
         pickle.dump([enhanced_target_embed, enhanced_opinion_embed, target_list, opinion_list], f)
 
+# load pre-saved embedes
 def loadBertEmbed():
     import pickle
     enhanced_target_embed, enhanced_opinion_embed, target_list, opinion_list = pickle.load(open('/home/gene/Documents/Sentiment/JDComment_seg/data/enhanced_entity_embed_bert.pkl', 'rb'))
     return enhanced_target_embed, enhanced_opinion_embed, target_list, opinion_list
 
+# for kg enhanced embedding
+def load_kg_info(model_time = '12111305'):
+    from_file = '/home/gene/Documents/Senti/Comment/knowledgebase/unlabel/deduplicate/data.txt'
+    target_ids, opinion_ids, target_list, opinion_list = getEntity(from_file)
+    target_triplet_dict, opinion_triplet_dict = getAllEntityTriplet()
+    enhanced_target_embed, enhanced_opinion_embed, target_list, opinion_list = loadBertEmbed()
+    target_top_triplet_dict, opinion_top_triplet_dict = getTopEntityTriplet()
+    
+    # use transe embedding
+    import pickle
+    ent_dict, ent_emb = pickle.load(open('/home/gene/Documents/Senti/Comment/CommentTransE/result/transe_ent_emb.{}.pkl'.format(model_time), 'rb'))
+    ent_emb_dict = {ent: ent_emb[ent_dict[ent]] for ent in ent_dict}
+
+    return target_triplet_dict, opinion_triplet_dict, target_ids, opinion_ids, ent_emb_dict, enhanced_target_embed, enhanced_opinion_embed
 
 
 if __name__ == '__main__':

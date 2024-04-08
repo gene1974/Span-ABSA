@@ -38,21 +38,22 @@ class Factory(object):
                     print("{}: {}".format(name, list(param.shape)))
         return None
 
+    # 分别打印 Target, Opinion, Relation Pair, Quad的Precision, Recall, F1；不打印对于ent的type和polar的分类
     def print_metrics(self, metrics, logger=None):
         if logger is not None:
-            logger.print("Tgt(full): {:.4f}, {:.4f}, {:.4f}".format(metrics["tgt_full"][0], metrics["tgt_full"][1], metrics["tgt_full"][2]))
-            logger.print("Tgt(span): {:.4f}, {:.4f}, {:.4f}".format(metrics["tgt_span"][0], metrics["tgt_span"][1], metrics["tgt_span"][2]))
-            logger.print("Opn(full): {:.4f}, {:.4f}, {:.4f}".format(metrics["opn_full"][0], metrics["opn_full"][1], metrics["opn_full"][2]))
-            logger.print("Opn(span): {:.4f}, {:.4f}, {:.4f}".format(metrics["opn_span"][0], metrics["opn_span"][1], metrics["opn_span"][2]))
-            logger.print("Rel(full): {:.4f}, {:.4f}, {:.4f}".format(metrics["rel_full"][0], metrics["rel_full"][1], metrics["rel_full"][2]))
-            logger.print("Rel(pair): {:.4f}, {:.4f}, {:.4f}".format(metrics["rel_pair"][0], metrics["rel_pair"][1], metrics["rel_pair"][2]))
+            # logger.print("Tgt(full): {:.4f}, {:.4f}, {:.4f}".format(metrics["tgt_full"][0], metrics["tgt_full"][1], metrics["tgt_full"][2]))
+            # logger.print("Opn(full): {:.4f}, {:.4f}, {:.4f}".format(metrics["opn_full"][0], metrics["opn_full"][1], metrics["opn_full"][2]))
+            logger.print("Tgt:  {:.4f}, {:.4f}, {:.4f}".format(metrics["tgt_span"][0], metrics["tgt_span"][1], metrics["tgt_span"][2]))
+            logger.print("Opn:  {:.4f}, {:.4f}, {:.4f}".format(metrics["opn_span"][0], metrics["opn_span"][1], metrics["opn_span"][2]))
+            logger.print("Rel:  {:.4f}, {:.4f}, {:.4f}".format(metrics["rel_pair"][0], metrics["rel_pair"][1], metrics["rel_pair"][2]))
+            logger.print("Quad: {:.4f}, {:.4f}, {:.4f}".format(metrics["rel_full"][0], metrics["rel_full"][1], metrics["rel_full"][2]))
         else:
-            print("Tgt(full): {:.4f}, {:.4f}, {:.4f}".format(metrics["tgt_full"][0], metrics["tgt_full"][1], metrics["tgt_full"][2]))
-            print("Tgt(span): {:.4f}, {:.4f}, {:.4f}".format(metrics["tgt_span"][0], metrics["tgt_span"][1], metrics["tgt_span"][2]))
-            print("Opn(full): {:.4f}, {:.4f}, {:.4f}".format(metrics["opn_full"][0], metrics["opn_full"][1], metrics["opn_full"][2]))
-            print("Opn(span): {:.4f}, {:.4f}, {:.4f}".format(metrics["opn_span"][0], metrics["opn_span"][1], metrics["opn_span"][2]))
-            print("Rel(full): {:.4f}, {:.4f}, {:.4f}".format(metrics["rel_full"][0], metrics["rel_full"][1], metrics["rel_full"][2]))
-            print("Rel(pair): {:.4f}, {:.4f}, {:.4f}".format(metrics["rel_pair"][0], metrics["rel_pair"][1], metrics["rel_pair"][2]))
+            # print("Tgt(full): {:.4f}, {:.4f}, {:.4f}".format(metrics["tgt_full"][0], metrics["tgt_full"][1], metrics["tgt_full"][2]))
+            # print("Opn(full): {:.4f}, {:.4f}, {:.4f}".format(metrics["opn_full"][0], metrics["opn_full"][1], metrics["opn_full"][2]))
+            print("Tgt:  {:.4f}, {:.4f}, {:.4f}".format(metrics["tgt_span"][0], metrics["tgt_span"][1], metrics["tgt_span"][2]))
+            print("Opn:  {:.4f}, {:.4f}, {:.4f}".format(metrics["opn_span"][0], metrics["opn_span"][1], metrics["opn_span"][2]))
+            print("Rel:  {:.4f}, {:.4f}, {:.4f}".format(metrics["rel_pair"][0], metrics["rel_pair"][1], metrics["rel_pair"][2]))
+            print("Quad: {:.4f}, {:.4f}, {:.4f}".format(metrics["rel_full"][0], metrics["rel_full"][1], metrics["rel_full"][2]))
         return None
 
     def get_dataset_config(self):
@@ -71,6 +72,9 @@ class Factory(object):
 
     def get_model_config(self):
         model_config = {
+            "use_ent_span": self.args.use_ent_span,
+            "use_rel_span": self.args.use_rel_span,
+            "kg_enhance": self.args.kg_enhance,
             "bert_path": self.args.bert_path,
             "max_text_len": self.args.max_text_len,
             "max_span_len": self.args.max_span_len,
@@ -345,6 +349,10 @@ class Factory(object):
         self.print_args(logger)
         logger.print("--------------------------")
 
+        import time
+        time_stamp = time.strftime("%Y%m%d_%H%M", time.localtime())
+        model_path = '{}.{}'.format(self.args.model_path, time_stamp)
+
         # dataset config
         dataset_config = self.get_dataset_config()
 
@@ -444,8 +452,8 @@ class Factory(object):
                 best_epoch = epoch + 1
                 best_score = valid_score
                 best_metrics = valid_metrics
-                logger.print("saving model to {}".format(self.args.model_path))
-                self.save_model(model, self.args.model_path)
+                logger.print("saving model to {}".format(model_path))
+                self.save_model(model, model_path)
             else:
                 num_no_improve += 1
                 if num_no_improve == self.args.max_no_improve:
