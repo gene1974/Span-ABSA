@@ -45,6 +45,7 @@ class Factory(object):
             # logger.print("Opn(full): {:.4f}, {:.4f}, {:.4f}".format(metrics["opn_full"][0], metrics["opn_full"][1], metrics["opn_full"][2]))
             logger.print("Tgt:  {:.4f}, {:.4f}, {:.4f}".format(metrics["tgt_span"][0], metrics["tgt_span"][1], metrics["tgt_span"][2]))
             logger.print("Opn:  {:.4f}, {:.4f}, {:.4f}".format(metrics["opn_span"][0], metrics["opn_span"][1], metrics["opn_span"][2]))
+            logger.print("Ent:  {:.4f}, {:.4f}, {:.4f}".format(metrics["ent_span"][0], metrics["ent_span"][1], metrics["ent_span"][2]))
             logger.print("Rel:  {:.4f}, {:.4f}, {:.4f}".format(metrics["rel_pair"][0], metrics["rel_pair"][1], metrics["rel_pair"][2]))
             logger.print("Quad: {:.4f}, {:.4f}, {:.4f}".format(metrics["rel_full"][0], metrics["rel_full"][1], metrics["rel_full"][2]))
         else:
@@ -52,6 +53,7 @@ class Factory(object):
             # print("Opn(full): {:.4f}, {:.4f}, {:.4f}".format(metrics["opn_full"][0], metrics["opn_full"][1], metrics["opn_full"][2]))
             print("Tgt:  {:.4f}, {:.4f}, {:.4f}".format(metrics["tgt_span"][0], metrics["tgt_span"][1], metrics["tgt_span"][2]))
             print("Opn:  {:.4f}, {:.4f}, {:.4f}".format(metrics["opn_span"][0], metrics["opn_span"][1], metrics["opn_span"][2]))
+            print("Ent:  {:.4f}, {:.4f}, {:.4f}".format(metrics["ent_span"][0], metrics["ent_span"][1], metrics["ent_span"][2]))
             print("Rel:  {:.4f}, {:.4f}, {:.4f}".format(metrics["rel_pair"][0], metrics["rel_pair"][1], metrics["rel_pair"][2]))
             print("Quad: {:.4f}, {:.4f}, {:.4f}".format(metrics["rel_full"][0], metrics["rel_full"][1], metrics["rel_full"][2]))
         return None
@@ -281,6 +283,8 @@ class Factory(object):
         n_true_opn_span, n_pred_opn_span, n_hits_opn_span = 0, 0, 0
         n_true_rel_full, n_pred_rel_full, n_hits_rel_full = 0, 0, 0
         n_true_rel_pair, n_pred_rel_pair, n_hits_rel_pair = 0, 0, 0
+        n_true_ent_full, n_pred_ent_full, n_hits_ent_full = 0, 0, 0
+        n_true_ent_span, n_pred_ent_span, n_hits_ent_span = 0, 0, 0
 
         for idx in range(dataset.num_instances):
             true_tgt_fulls = dataset.instances[idx].tgt_labels
@@ -311,6 +315,16 @@ class Factory(object):
             n_pred_opn_span += n_pred
             n_hits_opn_span += n_hits
 
+            # entitys: target + opinion
+            n_true, n_pred, n_hits = count_instances(true_tgt_fulls + true_opn_fulls, pred_tgt_fulls + pred_opn_fulls)
+            n_true_ent_span += n_true
+            n_pred_ent_span += n_pred
+            n_hits_ent_span += n_hits
+            n_true, n_pred, n_hits = count_instances(true_tgt_fulls + true_opn_fulls, pred_tgt_fulls + pred_opn_fulls)
+            n_true_ent_full += n_true
+            n_pred_ent_full += n_pred
+            n_hits_ent_full += n_hits
+
             true_rel_fulls = dataset.instances[idx].rel_labels
             pred_rel_fulls = results[idx]["rel_labels"]
             n_true, n_pred, n_hits = count_instances(true_rel_fulls, pred_rel_fulls)
@@ -331,6 +345,8 @@ class Factory(object):
         opn_span_p, opn_span_r, opn_span_f = compute_prf(n_true_opn_span, n_pred_opn_span, n_hits_opn_span)
         rel_full_p, rel_full_r, rel_full_f = compute_prf(n_true_rel_full, n_pred_rel_full, n_hits_rel_full)
         rel_pair_p, rel_pair_r, rel_pair_f = compute_prf(n_true_rel_pair, n_pred_rel_pair, n_hits_rel_pair)
+        ent_full_p, ent_full_r, ent_full_f = compute_prf(n_true_ent_full, n_pred_ent_full, n_hits_ent_full)
+        ent_span_p, ent_span_r, ent_span_f = compute_prf(n_true_ent_span, n_pred_ent_span, n_hits_ent_span)
         metrics = {
             "tgt_full": (tgt_full_p, tgt_full_r, tgt_full_f),
             "tgt_span": (tgt_span_p, tgt_span_r, tgt_span_f),
@@ -338,6 +354,8 @@ class Factory(object):
             "opn_span": (opn_span_p, opn_span_r, opn_span_f),
             "rel_full": (rel_full_p, rel_full_r, rel_full_f),
             "rel_pair": (rel_pair_p, rel_pair_r, rel_pair_f),
+            "ent_full": (ent_full_p, ent_full_r, ent_full_f),
+            "ent_span": (ent_span_p, ent_span_r, ent_span_f),
         }
         return metrics
 
@@ -466,6 +484,42 @@ class Factory(object):
         self.print_metrics(best_metrics, logger)
         return None
 
+    def test(self, model_time = '20240407_1722'):
+        logger = Logger(self.args.log_path)
+        logger.print('Test model: {}'.format(model_time))
+        dataset_config = self.get_dataset_config()
+        model_config = self.get_model_config()
+        model_path = '{}.{}'.format(self.args.model_path, model_time)
+
+        # validation dataset
+        valid_dataset = Dataset(dataset_config, train_mode=False)
+        logger.print("building validation dataset from {}".format(self.args.valid_data_path))
+        valid_dataset.load_data_from_file(self.args.valid_data_path)
+        valid_sampler = SequentialSampler(valid_dataset)
+        valid_dataloader = DataLoader(valid_dataset, sampler=valid_sampler, batch_size=self.args.train_batch_size)
+        logger.print("number of validation instances: {}".format(len(valid_dataset)))
+
+        model = Model(model_config)
+        model.load_state_dict(torch.load(model_path))
+        model.cuda()
+
+        logger.print("----------------------------------------")
+        valid_outputs = self.predict(dataset=valid_dataset,
+                                        dataloader=valid_dataloader,
+                                        model=model)
+        # 解码
+        valid_results = self.decode(dataset=valid_dataset,
+                                    outputs=valid_outputs)
+        # 评估
+        valid_metrics = self.evaluate(dataset=valid_dataset,
+                                        results=valid_results)
+
+        # print metrics
+        valid_score = (valid_metrics["tgt_full"][2] + valid_metrics["opn_full"][2] + valid_metrics["rel_full"][2]) / 3.0
+        logger.print("Test score: {:.4f}".format(valid_score))
+        self.print_metrics(valid_metrics, logger)
+        return
+    
     def initialize(self):
         print("---------- args ----------")
         self.print_args()
